@@ -1,0 +1,324 @@
+clc
+clear
+
+%Oil Properties
+Oil_Rate = 10000; %STB/Day     #############################################################
+Oil_API = 30 ;
+Oil_Specific_Gravity = 141.5/(Oil_API + 131.5);
+
+%Water Properties
+Water_Cut = 0; % => 0< water cut <1
+Water_Rate = Water_Cut * Oil_Rate;  %STB/Day
+Water_Specific_Gravity = 1;
+
+%Gas Properties
+Produced_Gas_Oil_Ratio = 1000 ;  %Total gas (solution + free) production divided by the oil production volume
+Gas_Rate = Produced_Gas_Oil_Ratio * Oil_Rate;  % => scf/D
+Gas_Specific_Gravity = 0.75;
+Gas_molecular_weight = 28.97 * Gas_Specific_Gravity; % => Ibm/Ibmole
+
+%Specifications of the production pipeline(Producion Tubing)
+Pipe_Diameter = 6;  % => inch
+Pipe_Length = 4000 ; % => feet
+Absolute_Roughness = 0.00006 ; % => feet
+Inclination_Angle = 90 ; % ° from horizontal
+WellHead_Temperature = 100 ; %Fahrenheit
+DownHole_Temperature = 200 ; % Fahrenheit
+Inlet_Pressure = 1700; % => Psi    ##############################################
+Flow_Area = (pi/4) * (Pipe_Diameter/12)^2 ; % => ft2
+
+%Liquid and Gas Stock Tank Properties
+Liquid_Surface_Tension = 8.41; % => dyns/cm
+
+Nember_Of_Segment = 200 ; % =>number of  length increments of Production tubing
+Segment_Length = Pipe_Length/Nember_Of_Segment ;
+gc = 32.174097; %conversion constant equal to 32.174049, lbmft / lbfsec2
+%--------------------------------------------------------------------------
+Pressure_Profile = []; %Pressure list for segments along the pipe
+HL = []; %Liquid holdup list for segments along the pipe
+
+Temperature_Gradient = (DownHole_Temperature - WellHead_Temperature) / (Pipe_Length) ;
+First_Segment_Pressure = Inlet_Pressure;
+
+Flow_Index = input(['\nWaht Is Flow Direction? =>\n\n ' ...
+    '1- DownHill Flow\n '...
+    '2- UpHill Flow\n\n'...
+    'Select Number Of Flow Direction And Press Enter : ']);
+for i = 1:1:Nember_Of_Segment
+    Delta_P_Guess = 0.1 ;
+    if Flow_Index == 1
+        Up_Segment_Pressure_Guess = First_Segment_Pressure - Delta_P_Guess*Segment_Length;
+        T1 = DownHole_Temperature - Temperature_Gradient * (i - 1) * Segment_Length + 460;
+        T2 = DownHole_Temperature - Temperature_Gradient * (i) * Segment_Length + 460 ;
+        Average_Temperature = (T1 + T2)/2;
+    elseif Flow_Index == 2
+        Up_Segment_Pressure_Guess = First_Segment_Pressure + Delta_P_Guess*Segment_Length;
+        T1 = WellHead_Temperature + Temperature_Gradient * (i - 1) * Segment_Length + 460;
+        T2 = WellHead_Temperature + Temperature_Gradient * (i) * Segment_Length + 460;
+        Average_Temperature = (T1 + T2)/2;
+    end
+   
+    
+    error = 1;
+    while error >0.1
+        %Average Pressure of each segment for PVT calculation is used
+        Average_Pressure = ( First_Segment_Pressure + Up_Segment_Pressure_Guess)/2;
+        %----------------------PVT Calculation-----------------------------
+        %Z Factor Calculation for Gas
+        critical_Pressure = 709.604 - 58.718*Gas_Specific_Gravity;
+        critical_Temperature = 170.491 + 307.344*Gas_Specific_Gravity;
+        T_pr = Average_Temperature / critical_Temperature;
+        P_pr = Average_Pressure / critical_Pressure;
+        A = 1.39*(T_pr-0.92)^0.5 - 0.36*T_pr -0.1;
+        F = 0.3106 - 0.49*T_pr + 0.1824*T_pr^2;
+        E = 9*(T_pr-1);
+        B = (0.62 - 0.23*T_pr)*P_pr + (0.066/(T_pr-0.86)-0.037)*P_pr^2 + (0.32*P_pr^6/10^E);
+        C = 0.132 - 0.32*log10(T_pr);
+        D = 10^F ;
+        Z_Factor = A + (1-A)/exp(B) +C*(P_pr^D);
+        
+        %Gas Solution Calculation
+        t = Average_Temperature - 460 ;
+        Rs = Gas_Specific_Gravity*((Average_Pressure/18)*10^(0.0125*Oil_API)/10^(0.00091*t))^1.2048 ;
+        
+        %Gas Volume Factor Calculation
+        Bg = 0.00504*Z_Factor*Average_Temperature/Average_Pressure;
+        
+        %Oil Volume Factor Calculation
+        t = Average_Temperature - 460 ;
+        Bo = 0.9759 + 0.00012*(Rs*sqrt(Gas_Specific_Gravity/Oil_Specific_Gravity)+1.25*t)^1.2;
+        
+        %Water Volume Factor Calculation
+        t = Average_Temperature - 460;
+        VwP = -1.0001*0.01+1.33391*10^(-4)*t+5.50654*10^(-7)*t^2;
+        VwT = -1.95301*10^(-9)*Average_Temperature*Average_Pressure-1.72834*10^(-13)*Average_Pressure^2*t-3.58922*10^(-7)*Average_Pressure-2.25341*10^(-10)*Average_Pressure^2;
+        Bw = (1+VwT)*(1+VwP);
+        
+        %Bubble Pressure Calculation
+        Pb = (5.38088*10^(-3))*(Rs^0.715082)*(Gas_Specific_Gravity^(-1.877840))*(Oil_Specific_Gravity^3.1437)*(Average_Temperature^1.32657);
+        
+        %Oil Viscosity Calculation
+        A = 10^(0.43 + 8.33/Oil_API);
+        DeadOil_Viscosity = (0.32+(1.8*10^7)/(Oil_API^4.53))*(360/(Average_Temperature-260))^A;
+        a = Rs*(2.2*10^(-7)*Rs-7.4*10^(-4));
+        c = 8.62*10^(-5)*Rs ;
+        d = 1.1*10^(-3)*Rs ;
+        e = 3.74*10^(-3)*Rs ;
+        b = (0.68/(10^c)) + (0.25/(10^d)) + (0.062/(10^e)) ;
+        BubblePoint_Viscosity = (10^a)*(DeadOil_Viscosity^b) ;
+        Oil_Viscosity = BubblePoint_Viscosity + 0.001*(Average_Pressure-Pb)*(0.024*BubblePoint_Viscosity^1.6 + 0.38*BubblePoint_Viscosity^0.56);
+        
+        %Water Viscosity Calculation
+        Water_Viscosity = exp(1.003 - 1.479*0.01*(Average_Temperature-460) + 1.982*10^(-5)*(Average_Temperature-460)^2);
+        
+        %Liquid (Water + Oil) Viscosity Calculation
+        Liquid_Viscosity = Oil_Viscosity*(1-Water_Cut) + Water_Viscosity*Water_Cut;
+        
+        %Gas Density Calculation
+        Gas_Density = 28.967*Gas_Specific_Gravity*Average_Pressure/(10.732*Average_Temperature*Z_Factor);
+        
+        %Gas Viscosity Calculation
+        K = (9.4+0.02*Gas_molecular_weight)*(Average_Temperature)^1.5/(209+19*Gas_molecular_weight+Average_Temperature);
+        X = 3.5+(986/Average_Temperature)+0.01*Gas_molecular_weight;
+        Y = 2.4 - 0.2*X;
+        Gas_Viscosity = (10^(-4))*K*exp(X*(Gas_Density/62.4)^Y);
+        
+        %Liquid(Water + Oil) Density Calculation
+        Liquid_Density = ((62.4*Oil_Specific_Gravity+(Rs*0.0764*Gas_Specific_Gravity/5.615))/Bo)*(1-Water_Cut) + (62.4*Water_Specific_Gravity/Bw)*Water_Cut;
+        
+        
+        
+        %-------------------------------------------------------------------------------------------------------------------------------
+        % Elevation Pressure drop Calculation
+        VsL = (5.615*Oil_Rate/(84600*Flow_Area))*(Bo*(1-Water_Cut)+Bw*Water_Cut);
+        Tk = Average_Temperature/1.8;
+        VsG = Gas_Rate/(86400*Flow_Area)*(14.7/Average_Pressure)*(Tk/520)*Z_Factor;
+        
+        NoSlip_Mixture_Velocity = VsL+VsG;
+        Froude_number = ( NoSlip_Mixture_Velocity^2)/(32.174*Pipe_Diameter/12);
+        NoSlip_Liquid_HoldUp = VsL/(VsL+VsG);
+        NLv = 1.938*VsL*(Liquid_Density/Liquid_Surface_Tension)^0.25;
+        % Determine Flow pattern and Liquid HoldUp0
+        L1 = 316*NoSlip_Liquid_HoldUp^0.302;
+        L2 = 0.0009252*NoSlip_Liquid_HoldUp^(-2.4684);
+        L3 = 0.1*NoSlip_Liquid_HoldUp^(-1.4516);
+        L4 = 0.5*NoSlip_Liquid_HoldUp^(-6.738);
+        A = (L3-Froude_number)/(L3-L2);
+        %-------------------------------------------------------------------------------------------------------------------
+        %To determine flow pattern and liquid holdup for each flow pattern
+        %Liquid holdup0 is liquid holdup which would exist at the same condition in horizental pipe
+        
+        %flow pattern index:
+        % 1.    SEGREGATED
+        % 2.    TRANSITION
+        % 3.    INTERMITTENT
+        % 4.    DISTRIBUTED
+
+        if NoSlip_Liquid_HoldUp<0.01 && Froude_number<L1
+            %SEGREGATED flow pattern
+            Flow_pattern_index = 1;
+            Liquid_HoldUp0 = 0.98*(NoSlip_Liquid_HoldUp^0.4846)/Froude_number^0.0868 ;
+            if Flow_Index == 1
+                C = (1-NoSlip_Liquid_HoldUp)*log(0.011*(NLv^3.539)*(NoSlip_Liquid_HoldUp^(-3.768))*Froude_number^(-1.614));
+            elseif Flow_Index == 2
+                C = (1-NoSlip_Liquid_HoldUp)*log(4.7*(NLv^0.1244)*(NoSlip_Liquid_HoldUp^(-0.3692))*Froude_number^(-0.5056));
+            end
+        elseif NoSlip_Liquid_HoldUp>=0.01 && Froude_number<L2
+            %SEGREGATED  flow pattern
+            Flow_pattern_index = 1;
+            Liquid_HoldUp0 = 0.98*(NoSlip_Liquid_HoldUp^0.4846)/Froude_number^0.0868 ;
+            if Flow_Index == 1
+                C = (1-NoSlip_Liquid_HoldUp)*log(0.011*(NLv^3.539)*(NoSlip_Liquid_HoldUp^(-3.768))*Froude_number^(-1.614));
+            elseif Flow_Index == 2
+                C = (1-NoSlip_Liquid_HoldUp)*log(4.7*(NLv^0.1244)*(NoSlip_Liquid_HoldUp^(-0.3692))*Froude_number^(-0.5056));
+            end
+        elseif NoSlip_Liquid_HoldUp>=0.01 && Froude_number>=L2 && Froude_number<=L3
+            %TRANSITION  flow pattern
+            Flow_pattern_index = 2;
+        elseif NoSlip_Liquid_HoldUp>=0.01 && NoSlip_Liquid_HoldUp<0.4 &&  Froude_number>L3 &&  Froude_number<=L1
+            %INTERMITTENT  flow pattern
+            Flow_pattern_index = 3;
+            Liquid_HoldUp0 = 0.845*(NoSlip_Liquid_HoldUp^0.5351)/Froude_number^0.0173 ;
+            if Flow_Index == 1
+                C = (1-NoSlip_Liquid_HoldUp)*log(2.96*(NLv^(-0.4473))*(NoSlip_Liquid_HoldUp^(0.305))*Froude_number^(0.0978));
+            elseif Flow_Index == 2
+                C = (1-NoSlip_Liquid_HoldUp)*log(4.7*(NLv^0.1244)*(NoSlip_Liquid_HoldUp^(-0.3692))*Froude_number^(-0.5056));
+            end
+        elseif NoSlip_Liquid_HoldUp>=0.4 && Froude_number>L3 && Froude_number<=L4
+            %INTERMITTENT  flow pattern
+            Flow_pattern_index = 3;
+            Liquid_HoldUp0 = 0.845*(NoSlip_Liquid_HoldUp^0.5351)/Froude_number^0.0173 ;
+            if Flow_Index == 1
+                C = (1-NoSlip_Liquid_HoldUp)*log(2.96*(NLv^(-0.4473))*(NoSlip_Liquid_HoldUp^(0.305))*Froude_number^(0.0978));
+            elseif Flow_Index == 2
+                C = (1-NoSlip_Liquid_HoldUp)*log(4.7*(NLv^0.1244)*(NoSlip_Liquid_HoldUp^(-0.3692))*Froude_number^(-0.5056));
+            end
+        elseif NoSlip_Liquid_HoldUp<0.4 && Froude_number>=L1
+            %DISTRIBUTED  flow pattern
+            Flow_pattern_index = 4;
+            Liquid_HoldUp0 = 1.065*(NoSlip_Liquid_HoldUp^0.5824)/Froude_number^0.0609 ;
+            if Flow_Index == 1
+                C = 0;
+            elseif Flow_Index == 2
+                C = (1-NoSlip_Liquid_HoldUp)*log(4.7*(NLv^0.1244)*(NoSlip_Liquid_HoldUp^(-0.3692))*Froude_number^(-0.5056));
+            end
+        elseif NoSlip_Liquid_HoldUp>=0.4 && Froude_number>L4
+            %DISTRIBUTED  flow pattern
+            Flow_pattern_index = 4;
+            Liquid_HoldUp0 = 1.065*(NoSlip_Liquid_HoldUp^0.5824)/Froude_number^0.0609 ;
+            if Flow_Index == 1
+                C = 0;
+            elseif Flow_Index == 2
+                C = (1-NoSlip_Liquid_HoldUp)*log(4.7*(NLv^0.1244)*(NoSlip_Liquid_HoldUp^(-0.3692))*Froude_number^(-0.5056));
+            end
+        end
+        
+        %Liquid HoldUp Calculation for each flow pattern
+        if Flow_pattern_index==1 || Flow_pattern_index ==3 || Flow_pattern_index ==4
+            %The holdup correcting factor for effect of pipe inclination
+            inclination_correction_factor = 1 + C*(sin(1.8*(Inclination_Angle*pi/180))-0.333*(sin(1.8*(Inclination_Angle*pi/180)))^3);
+            Slip_Liquid_HoldUp = inclination_correction_factor*Liquid_HoldUp0 ;
+        elseif Flow_pattern_index==2
+            %for transition flow regime , calculate slip liquid holdup as follows:
+            % HL(transition)=A*HL(segregated) + (1-A)*HL(intermittent)
+            if Flow_Index == 1
+                C_Segregated = (1-NoSlip_Liquid_HoldUp)*log(0.011*(NLv^3.539)*(NoSlip_Liquid_HoldUp^(-3.768))*Froude_number^(-1.614));
+            elseif Flow_Index == 2
+                C_Segregated = (1-NoSlip_Liquid_HoldUp)*log(4.7*(NLv^0.1244)*(NoSlip_Liquid_HoldUp^(-0.3692))*Froude_number^(-0.5056));
+            end
+            inclination_correction_factor_Segregated = 1 + C_Segregated*(sin(1.8*(Inclination_Angle*pi/180))-0.333*(sin(1.8*(Inclination_Angle*pi/180)))^3);
+            Liquid_HoldUp0_Segregated = 0.98*(NoSlip_Liquid_HoldUp^0.4846)/Froude_number^0.0868 ;
+            HoldUp_Segregated = inclination_correction_factor_Segregated*Liquid_HoldUp0_Segregated;
+            if Flow_Index == 1
+                C_Intermittent = (1-NoSlip_Liquid_HoldUp)*log(2.96*(NLv^(-0.4473))*(NoSlip_Liquid_HoldUp^(0.305))*Froude_number^(0.0978));
+            elseif Flow_Index == 2
+                C_Intermittent = (1-NoSlip_Liquid_HoldUp)*log(4.7*(NLv^0.1244)*(NoSlip_Liquid_HoldUp^(-0.3692))*Froude_number^(-0.5056));
+            end
+            inclination_correction_factor_Intermittent = 1 + C_Intermittent*(sin(1.8*(Inclination_Angle*pi/180))-0.333*(sin(1.8*(Inclination_Angle*pi/180)))^3);
+            Liquid_HoldUp0_Intermittent = 0.845*(NoSlip_Liquid_HoldUp^0.5351)/Froude_number^0.0173 ;
+            HoldUp_Intermittent =  inclination_correction_factor_Intermittent * Liquid_HoldUp0_Intermittent;
+            Slip_Liquid_HoldUp = A*HoldUp_Segregated + (1-A)*HoldUp_Intermittent;
+        end
+        
+        if Slip_Liquid_HoldUp >=1
+            Slip_Liquid_HoldUp = 1;
+        end
+        
+        Slip_Mixture_Density = Slip_Liquid_HoldUp*Liquid_Density + (1-Slip_Liquid_HoldUp)*Gas_Density;
+        if Flow_Index == 1
+            Delta_P_Elevation = sin(-Inclination_Angle*pi/180)*Slip_Mixture_Density;
+        elseif Flow_Index == 2
+            Delta_P_Elevation = sin(Inclination_Angle*pi/180)*Slip_Mixture_Density;
+        end
+        %-------------------------------------------------------------------------------------------------------------------------------------
+        % friction pressure drop calculation
+        NoSlip_Mixture_Density = Liquid_Density*NoSlip_Liquid_HoldUp + Gas_Density*(1-NoSlip_Liquid_HoldUp);
+        Reynolds_Number = 1488*(NoSlip_Mixture_Density*NoSlip_Mixture_Velocity*Pipe_Diameter/12)/(Liquid_Viscosity*NoSlip_Liquid_HoldUp+Gas_Viscosity*(1-NoSlip_Liquid_HoldUp));
+        
+        % Friction factor Calculation
+        E = 1;
+        %intial estmate of friction factor
+        FrictionFactor_estimate = 0.001;
+        while E>0.0001
+            %fanning frictio factor
+            Friction_Factor = (1/(-2*log10((Absolute_Roughness/(3.7*Pipe_Diameter))+(2.51/(Reynolds_Number*sqrt(FrictionFactor_estimate))))))^2;
+            E = abs(Friction_Factor - FrictionFactor_estimate);
+            FrictionFactor_estimate = Friction_Factor;
+        end
+        Y = NoSlip_Liquid_HoldUp/Slip_Liquid_HoldUp^2;
+        %to correct fanning frictio factor to two phase friction factor
+        if Y>1 && Y<1.2
+            S = log(2.2*Y - 1.2);
+        else
+            S = log(Y)/(-0.0523+3.182*log(Y)-0.8725*(log(Y))^2+0.01853*(log(Y))^4);
+        end
+        f = Friction_Factor * exp(S);
+        
+        Delta_P_Friction = (f*NoSlip_Mixture_Density*NoSlip_Mixture_Velocity^2)/(2*32.17*Pipe_Diameter/12);
+        %------------------------------------------------------------------------------------------------------------------------------------------------
+        % acceleration pressure drop calculation
+        Ek = Slip_Mixture_Density*NoSlip_Mixture_Velocity*VsG/(32.17*Average_Pressure);
+        %---------------------------------------------------------------------------------------
+        %Total Pressure drop calculation
+        % to calculate Pressure at top of each segment
+        Delta_P = ((Delta_P_Elevation+Delta_P_Friction)/(1-Ek))*0.0069444;
+        Up_Segment_Pressure = First_Segment_Pressure - Segment_Length*Delta_P;
+        error = abs(Up_Segment_Pressure - Up_Segment_Pressure_Guess);
+        Up_Segment_Pressure_Guess = Up_Segment_Pressure;
+    end
+    %Pressure at Top of segment i is pressure at bottom of segment i+1
+    First_Segment_Pressure = Up_Segment_Pressure;
+    Pressure_Profile = [Pressure_Profile First_Segment_Pressure];
+    HL = [HL Slip_Liquid_HoldUp];
+end
+
+figure(1);
+if Flow_Index == 1
+    Length = Pipe_Length-Segment_Length/2:-Segment_Length:Segment_Length/2;
+elseif Flow_Index == 2
+    Length = Pipe_Length-Segment_Length/2 : -Segment_Length : Segment_Length/2;
+end
+plot(HL,Length,'LineWidth',2)
+xlabel('Liquid holdup')
+ylabel('Depth (ft)')
+title('The variation of liquid hold up in the production tubing')
+set(gca,'YDir','rev');
+grid minor
+grid on
+%--------------------------------------------------------------------------
+%----------------The profile of the pressure in well-----------------------
+figure(2);
+if Flow_Index == 1
+    Pressure_Profile = [Inlet_Pressure Pressure_Profile];
+    Length1 = 0:Segment_Length:Pipe_Length;
+elseif Flow_Index == 2
+    Pressure_Profile = [Inlet_Pressure Pressure_Profile];
+    Length1 = Pipe_Length :- Segment_Length : 0 ;
+end
+plot(Pressure_Profile,Length1,'LineWidth',2)
+xlabel('Pressure (Psi)')
+ylabel('Depth (ft)')
+title('The profile of the pressure in well')
+set(gca,'YDir','rev');
+grid minor
+grid on
